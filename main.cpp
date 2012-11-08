@@ -4,58 +4,123 @@
 #include <QFile>
 #include <QVector>
 
-struct Count
+struct Number
 {
-    int value, count;
-    Count() : value(-1), count(-1) {}
-    Count(int _value, int _count) : value(_value), count(_count) {}
+    uint value, bits;
+    Number() : value(0), bits(0) {}
+    Number(uint _value, uint _bits) : value(_value), bits(_bits) {}
+    Number(const QBitArray &bitArray)
+    {
+        bits = bitArray.size();
+        value = 0;
+        for (int i=0; i<bits; i++)
+            if (bitArray.at(i)) value += 1 << (bits-i-1);
+    }
+
+    operator QBitArray() const
+    {
+        QBitArray result(bits);
+        for (int i=0; i<bits; i++)
+            result.setBit(value & (1 << bits-i-1), i);
+        return result;
+    }
+
+    inline operator uint() const
+    {
+        return value;
+    }
+
+    inline void shift(bool nextVal)
+    {
+        value = ((value << 1) & ((1 << bits) - 1)) + (nextVal ? 1 : 0);
+    }
+
+    inline Number &operator<<(bool nextVal)
+    {
+        shift(nextVal);
+        return *this;
+    }
 };
 
-static void search(const QBitArray &data, int bits, Count &most, Count &least)
+QDebug operator<<(QDebug dbg, const Number &n)
 {
-    QVector<int> occurences(1 << bits, 0);
-    const int mask = (1 << bits) - 1;
-
-    int index = 0;
-    for (int i=0; i<bits-1; i++)
-        if (data.at(i)) index += 1 << (bits-i-1);
-
-    for (int i=0; i<data.size()-bits; i++) {
-        index = ((index << 1) & mask) + (data.at(i + bits - 1) ? 1 : 0);
-        occurences[index]++;
-    }
-
-    int mostCommonValue = -1;
-    int mostCommonCount = 0;
-    int leastCommonValue = -1;
-    int leastCommonCount = data.size();
-    for (int i=0; i<occurences.size(); i++) {
-        if (occurences[i] > mostCommonCount) {
-            mostCommonCount = occurences[i];
-            mostCommonValue = i;
-        }
-        if (occurences[i] < leastCommonCount) {
-            leastCommonCount = occurences[i];
-            leastCommonValue = i;
-        }
-    }
-
-    most = Count(mostCommonValue, mostCommonCount);
-    least = Count(leastCommonValue, leastCommonCount);
+    dbg.nospace() << n.value << " (" << n.bits << ")";
+    return dbg.space();
 }
 
-Count mostCommon(const QBitArray &data, int bits)
+struct Count
+{
+    Number number;
+    int count;
+    Count() : count(-1) {}
+    Count(const Number &_number, uint _count) : number(_number), count(_count) {}
+};
+
+static void search(const QBitArray &data, uint bits, Count &most, Count &least)
+{
+    Number index(0, bits);
+    for (int i=0; i<bits-1; i++)
+        index << data.at(i);
+
+    QVector<int> counts(1 << bits, 0);
+    for (int i=0; i<data.size()-bits; i++) {
+        index << data.at(i + bits - 1);
+        counts[index]++;
+    }
+
+    most = Count(Number(), 0);
+    least = Count(Number(), data.size());
+    for (int i=0; i<counts.size(); i++) {
+        if (counts[i] > most.count)
+            most = Count(Number(i, bits), counts[i]);
+        if (counts[i] < least.count)
+            least = Count(Number(i, bits), counts[i]);
+    }
+}
+
+static Count mostCommon(const QBitArray &data, int bits)
 {
     Count most, least;
     search(data, bits, most, least);
     return most;
 }
 
-Count leastCommon(const QBitArray &data, int bits)
+static Count leastCommon(const QBitArray &data, int bits)
 {
     Count most, least;
     search(data, bits, most, least);
     return least;
+}
+
+static QBitArray replace(const QBitArray &data, const Number &before, const Number &after)
+{
+    const int bits = before.bits;
+    QBitArray flag(data.size());
+
+    Number index(0, bits);
+    for (int i=0; i<bits-1; i++)
+        index << data.at(i);
+
+    for (int i=0; i<data.size()-bits; i++) {
+        index << data.at(i + bits - 1);
+        if (index == before) {
+            for (int j=0; j<bits; j++)
+                flag.setBit(i+j, true);
+            i += bits-1;
+        }
+    }
+
+    int resultIndex = 0;
+    QBitArray result(data.size());
+    for (int i=0; i<data.size(); i++) {
+        if (!flag.at(i)) {
+            result.setBit(resultIndex, data.at(i));
+            resultIndex++;
+        }
+    }
+    result.resize(resultIndex);
+
+    return result;
 }
 
 int main(int argc, char *argv[])
@@ -75,17 +140,20 @@ int main(int argc, char *argv[])
         for (int j=0; j<8; j++)
             data.setBit(i*8+j, byteArray[i] & (1 << j));
 
-    int bits = 0;
+    uint bits = 0;
     Count least;
     while (least.count != 0) {
         bits++;
         least = leastCommon(data, bits);
     }
 
-    qDebug("Zero value = %d (%d bits)", least.value, bits);
+    qDebug("Zero value = %d (%d bits)", least.number.value, bits);
 
     Count most = mostCommon(data, bits);
-    qDebug("Most value = %d (%d times)", most.value, most.count);
+    qDebug("Most value = %d (%d times)", most.number.value, most.count);
+
+    QBitArray result = replace(data, most.number, least.number);
+    qDebug("Size change = %d", data.size() - result.size());
 
     return 0;
 }
